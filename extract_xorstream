@@ -1,13 +1,43 @@
 #!/usr/bin/env ruby
 
+class DataCollection
+  def initialize(samples)
+    @samples = samples
+  end
+
+  def stats_for_byte(i)
+    rv = Hash.new(0)
+    @samples.each{|path|
+      open(path){|fh|
+        fh.seek(i)
+        rv[fh.read(1).unpack("C")[0]] += 1
+      }
+    }
+    rv
+  end
+end
+
 class ExtractXorstream
   def initialize(plaintext_samples, ciphertext_samples)
-    @plaintext_samples  = plaintext_samples
-    @ciphertext_samples = ciphertext_samples
+    @plaintext  = DataCollection.new(plaintext_samples)
+    @ciphertext = DataCollection.new(ciphertext_samples)
+  end
+
+  def analyze_byte!(i)
+    pdistr = @plaintext.stats_for_byte(i)
+    cdistr = @ciphertext.stats_for_byte(i)
+    if pdistr.size == 1 and cdistr.size == 1
+      xorkey = pdistr.keys[0] ^ cdistr.keys[0]
+      puts "%6d - %2x" % [i, xorkey]
+    else
+      puts "%6d - ??" % [i]
+    end
   end
 
   def run!
-    puts "And now do all the crypto!!!1"
+    16.times do |i|
+      analyze_byte!(i)
+    end
   end
 end
 
