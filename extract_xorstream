@@ -20,7 +20,8 @@ class DataCollection
   def stats_for_byte(i)
     rv = Hash.new(0)
     @samples.each{|path|
-      rv[byte(path, i)] += 1
+      val = byte(path, i)
+      rv[val] += 1 if val
     }
     rv
   end
@@ -32,14 +33,55 @@ class ExtractXorstream
     @ciphertext = DataCollection.new(ciphertext_samples)
   end
 
+  def analyze_bits!(i, pdistr, cdistr)
+    (0..7).each do |j|
+      p0, p1, c0, c1 = 0, 0, 0, 0
+      pdistr.each do |pval,count|
+        if pval[j] == 1
+          p1 += count
+        else
+          p0 += count
+        end
+      end
+      cdistr.each do |cval,count|
+        if cval[j] == 1
+          c1 += count
+        else
+          c0 += count
+        end
+      end
+      # 3:1 threshold is pretty aggressive
+      threshold = 3
+      if p0 >= p1*threshold
+        pval = 0
+      elsif p1 >= p0*threshold
+        pval = 1
+      else
+        pval = nil
+      end
+      if c0 >= c1*threshold
+        cval = 0
+      elsif c1 >= c0*threshold
+        cval = 1
+      else
+        cval = nil
+      end
+
+      xorkey = (pval && cval) ? (pval ^ cval) : nil
+      puts "%6d.%d %s - [%d/%d - %d/%d - %p/%p]" % [i,j,
+        (xorkey ? "% 2x"%[xorkey] : " ?"),p0,p1,c0,c1,pval,cval]
+    end
+
+  end
+
   def analyze_byte!(i)
     pdistr = @plaintext.stats_for_byte(i)
     cdistr = @ciphertext.stats_for_byte(i)
     if pdistr.size == 1 and cdistr.size == 1
       xorkey = pdistr.keys[0] ^ cdistr.keys[0]
-      puts "%6d - %2x" % [i, xorkey]
+      puts "%6d - %02x" % [i, xorkey]
     else
-      puts "%6d - ??" % [i]
+      analyze_bits!(i, pdistr, cdistr)
     end
   end
 
