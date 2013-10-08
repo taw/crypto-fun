@@ -3,15 +3,24 @@
 class DataCollection
   def initialize(samples)
     @samples = samples
+    @data_chunks = {}
+  end
+
+  def byte(path, i)
+    chunk_id = i / 4096
+    byte_id = i % 4096
+    @data_chunks[[path, chunk_id]] ||= open(path){|fh|
+      fh.seek(chunk_id * 4096)
+      fh.read(4096)
+    }
+    rv = @data_chunks[[path, chunk_id]][byte_id, 1]
+    rv && rv.ord
   end
 
   def stats_for_byte(i)
     rv = Hash.new(0)
     @samples.each{|path|
-      open(path){|fh|
-        fh.seek(i)
-        rv[fh.read(1).unpack("C")[0]] += 1
-      }
+      rv[byte(path, i)] += 1
     }
     rv
   end
@@ -35,7 +44,7 @@ class ExtractXorstream
   end
 
   def run!
-    16.times do |i|
+    128.times do |i|
       analyze_byte!(i)
     end
   end
