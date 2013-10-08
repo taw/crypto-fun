@@ -1,0 +1,17 @@
+#!/usr/bin/env ruby
+
+class ExtractXorstream
+  def initialize(plaintext_samples, ciphertext_samples)
+    @plaintext_samples  = plaintext_samples
+    @ciphertext_samples = ciphertext_samples
+  end
+
+  def run!
+    puts "And now do all the crypto!!!1"
+  end
+end
+
+ExtractXorstream.new(
+  Dir["plaintext_samples/*"],
+  Dir["ciphertext_samples/*"]
+).run!
