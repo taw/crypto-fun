@@ -1,0 +1,100 @@
+#!/usr/bin/env ruby
+require "digest/sha1"
+require "pry"
+require "z3"
+
+Int32 = Z3::BitvecSort.new(32)
+
+def leftrotate(value, shift)
+  # (((value << shift) | (value >> (32 - shift))) & 0xffffffff)
+  value.rotate_left(shift)
+end
+
+def pad_message(message)
+  byte_string = message + [128]
+  extra_zeroes = -(message.size + 9) % 64
+  byte_string += [0] * extra_zeroes + [message.size*8].pack("Q>").unpack("C*")
+  padded = byte_string.each_slice(4).map{ |slice| slice.inject{ |a,b| (a<<8) + b } }
+
+  padded.map do |num|
+    if num.is_a?(Integer)
+      Int32.from_const(num)
+    else
+      num
+    end
+  end
+end
+
+def sha1_reduce(chunk, chunk_number, hash_words, max_rounds)
+  (16..79).each do |i|
+    chunk_var = Z3.Bitvec("chunk-#{chunk_number}-#{i}", 32)
+    @solver.assert chunk_var == leftrotate((chunk[i-3] ^ chunk[i-8] ^ chunk[i-14] ^ chunk[i-16]), 1)
+    chunk << chunk_var
+  end
+  working_vars = hash_words.dup
+
+  max_rounds.times do |i|
+    if (0 <= i && i <= 19)
+      f = ((working_vars[1] & working_vars[2]) | (~working_vars[1] & working_vars[3]))
+      k = Int32.from_const(0x5A827999)
+    elsif (20 <= i && i <= 39)
+      f = (working_vars[1] ^ working_vars[2] ^ working_vars[3])
+      k = Int32.from_const(0x6ED9EBA1)
+    elsif (40 <= i && i <= 59)
+      f = ((working_vars[1] & working_vars[2]) | (working_vars[1] & working_vars[3]) | (working_vars[2] & working_vars[3]))
+      k = Int32.from_const(0x8F1BBCDC)
+    elsif (60 <= i && i <= 79)
+      f = (working_vars[1] ^ working_vars[2] ^ working_vars[3])
+      k = Int32.from_const(0xCA62C1D6)
+    end
+    # Complete round & Create array of working variables for next round.
+    temp = Z3.Bitvec("temp-#{chunk_number}-#{i}", 32)
+    @solver.assert temp == (leftrotate(working_vars[0], 5) + f + working_vars[4] + k + chunk[i]) & 0xffffffff
+    working_vars = [temp, working_vars[0], leftrotate(working_vars[1], 30), working_vars[2], working_vars[3]]
+  end
+
+  hash_words.zip(working_vars).map{ |a,b| (a+b) & 0xFFFF_FFFF }
+end
+
+def sha1(message, max_rounds)
+  pad_string = pad_message(message)
+  hash_words = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0].map{ |num| Int32.from_const(num) }
+
+  pad_string.each_slice(16).with_index do |chunk, chunk_number|
+    hash_words = sha1_reduce(chunk, chunk_number, hash_words, max_rounds)
+  end
+
+  hash_words
+end
+
+def hack!(max_rounds, expected_hash, message_size)
+  @solver = Z3::Solver.new
+  message = (0...message_size).map{ |i| Z3.Bitvec("c#{i}", 32) }
+  message.each do |c|
+    @solver.assert c.unsigned_ge(32)
+    @solver.assert c.unsigned_le(127)
+  end
+
+  hash_words = sha1(message, max_rounds)
+
+  expected_hash_words = expected_hash.scan(/.{8}/).map{ |x| x.to_i(16) }
+  5.times do |i|
+    @solver.assert hash_words[i] == expected_hash_words[i]
+  end
+
+  puts "SOLVING!"
+  # puts @solver.assertions.map(&:simplify)
+  if @solver.satisfiable?
+    puts "There is a solution!"
+    p message.map{|c| @solver.model[c].to_s.to_i.chr }.join
+  else
+    puts "No solution"
+  end
+end
+
+unless ARGV.size == 3
+  STDERR.puts "Usage: #{$0} <rounds> <hash> <message_size>"
+  exit 1
+end
+
+hack!(ARGV[0].to_i, ARGV[1], ARGV[2].to_i)

@@ -1,0 +1,118 @@
+#!/usr/bin/env ruby
+
+require "pry"
+require "z3"
+
+Int32 = Z3::BitvecSort.new(32)
+
+def pad_message(message)
+  byte_string = message + [128]
+  extra_zeroes = -(message.size + 9) % 64
+  byte_string += [0] * extra_zeroes + [message.size*8].pack("Q<").unpack("C*")
+  padded = byte_string.each_slice(4).map{ |slice| slice.reverse.inject{ |a,b| (a<<8) + b } }
+
+  padded.map do |num|
+    if num.is_a?(Integer)
+      Int32.from_const(num)
+    else
+      num
+    end
+  end
+end
+
+def rotate_left(value, shift)
+  value.rotate_left(shift)
+end
+
+def md4_reduce(x, chunk_number, hash_words, max_rounds)
+  mask = (1 << 32) - 1
+
+  a, b, c, d = hash_words
+  aa, bb, cc, dd = a, b, c, d
+
+  rotations = [
+    3,7,11,19, 3,7,11,19, 3,7,11,19, 3,7,11,19,
+    3,5,9,13, 3,5,9,13, 3,5,9,13, 3,5,9,13,
+    3,9,11,15, 3,9,11,15, 3,9,11,15, 3,9,11,15,
+  ]
+  schedule = [
+    0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+    0,4,8,12,1,5,9,13,2,6,10,14,3,7,11,15,
+    0,8,4,12,2,10,6,14,1,9,5,13,3,11,7,15,
+  ]
+
+  max_rounds.times do |j|
+    xi = x[schedule[j]]
+    ri = rotations[j]
+    u = Z3.Bitvec("u-#{chunk_number}-#{j}", 32)
+    if j <= 15
+      @solver.assert u == b & c | (b ^ mask) & d
+      k = Int32.from_const(0)
+    elsif j <= 31
+      @solver.assert u == b & c | b & d | c & d
+      k = Int32.from_const(0x5a827999)
+    else
+      @solver.assert u == b ^ c ^ d
+      k = Int32.from_const(0x6ed9eba1)
+    end
+    t = Z3.Bitvec("t-#{chunk_number}-#{j}", 32)
+    @solver.assert t == rotate_left(a + u + xi + k, ri)
+    a, b, c, d = d, t, b, c
+  end
+
+  [
+    (a + aa) & mask,
+    (b + bb) & mask,
+    (c + cc) & mask,
+    (d + dd) & mask,
+  ]
+end
+
+# Calculates MD4 message digest of _string_. Returns binary digest.
+# For hexadecimal digest, use +*md4(str).unpack('H*')+.
+def md4(message, max_rounds=48)
+  padded = pad_message(message)
+
+  a, b, c, d = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476].map{ |num| Int32.from_const(num) }
+
+  padded.each_slice(16).with_index do |x, xi|
+    a, b, c, d = md4_reduce(x, xi, [a, b, c, d], max_rounds)
+  end
+
+  [a, b, c, d]
+end
+
+def hack!(max_rounds, expected_hash, message_size)
+  @solver = Z3::Solver.new
+  message = (0...message_size).map{ |i| Z3.Bitvec("c#{i}", 32) }
+  message.each do |c|
+    @solver.assert c.unsigned_ge(32)
+    @solver.assert c.unsigned_le(126)
+  end
+
+  hash_words = md4(message, max_rounds)
+
+  expected_hash_words = [expected_hash].pack("H*").unpack("V*")
+  4.times do |i|
+    @solver.assert hash_words[i] == expected_hash_words[i]
+  end
+
+  puts "SOLVING!"
+  # puts "Assertions:"
+  # puts @solver.assertions
+  # puts "Simplified:"
+  # puts @solver.assertions.map(&:simplify)
+  if @solver.satisfiable?
+    puts "There is a solution!"
+    p message.map{|c| @solver.model[c].to_s.to_i.chr }.join
+  else
+    puts "No solution"
+  end
+end
+
+unless ARGV.size == 3
+  STDERR.puts "Usage: #{$0} <rounds> <hash> <message_size>"
+  exit 1
+end
+
+hack!(ARGV[0].to_i, ARGV[1], ARGV[2].to_i)

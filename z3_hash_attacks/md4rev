@@ -1,0 +1,80 @@
+#!/usr/bin/env ruby
+
+def pad_message(message)
+  byte_string = message.unpack("C*") + [128]
+  extra_zeroes = -(message.size + 9) % 64
+  byte_string += [0] * extra_zeroes + [message.size*8].pack("Q<").unpack("C*")
+  byte_string.each_slice(4).map{ |slice| slice.reverse.inject{ |a,b| (a<<8) + b } }
+end
+
+def rotate_left(v, s)
+  mask = (1 << 32) - 1
+  (v << s).&(mask) | (v.&(mask) >> (32 - s))
+end
+
+def md4_reduce(x, hash_words, max_rounds)
+  mask = (1 << 32) - 1
+
+  a, b, c, d = hash_words
+  aa, bb, cc, dd = a, b, c, d
+
+  rotations = [
+    3,7,11,19, 3,7,11,19, 3,7,11,19, 3,7,11,19,
+    3,5,9,13, 3,5,9,13, 3,5,9,13, 3,5,9,13,
+    3,9,11,15, 3,9,11,15, 3,9,11,15, 3,9,11,15,
+  ]
+  schedule = [
+    0,1,2,3, 4,5,6,7, 8,9,10,11, 12,13,14,15,
+    0,4,8,12, 1,5,9,13, 2,6,10,14, 3,7,11,15,
+    0,8,4,12, 2,10,6,14, 1,9,5,13, 3,11,7,15,
+  ]
+
+  (0...48).to_a.last(max_rounds).each do |j|
+    xi = x[schedule[j]]
+    ri = rotations[j]
+    if j <= 15
+      u = b & c | (b ^ mask) & d
+      k = 0
+    elsif j <= 31
+      u = b & c | b & d | c & d
+      k = 0x5a827999
+    else
+      u = b ^ c ^ d
+      k = 0x6ed9eba1
+    end
+    t = rotate_left(a + u + xi + k, ri)
+    a, b, c, d = d, t, b, c
+  end
+
+  [
+    (a + aa) & mask,
+    (b + bb) & mask,
+    (c + cc) & mask,
+    (d + dd) & mask,
+  ]
+end
+
+# Calculates MD4 message digest of _string_. Returns binary digest.
+# For hexadecimal digest, use +*md4(str).unpack('H*')+.
+def md4(message, max_rounds=48)
+  string = pad_message(message)
+
+  a, b, c, d = 0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476
+
+  string.each_slice(16) do |x|
+    a, b, c, d = md4_reduce(x, [a, b, c, d], max_rounds)
+  end
+
+  [a,b,c,d].pack("V4").unpack("H*")[0]
+end
+
+unless ARGV.size == 2
+  STDERR.puts "Usage: #{$0} <rounds> <message>"
+  exit 1
+end
+
+rounds = ARGV[0].to_i
+message = ARGV[1]
+hash = md4(message, rounds.to_i)
+puts "To crack:"
+puts "./md4_z3rev #{rounds} #{hash} #{message.size}"
